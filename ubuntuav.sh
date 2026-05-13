@@ -77,17 +77,17 @@ ui_cleanup() {
 trap ui_cleanup EXIT
 
 pause() {
-  printf '\n%b' "$C_DIM"
+  printf '\n%b' "$C_DIM" >&2
   read -r -p "Enter za nastavak..." _
-  printf '%b' "$C_RESET"
+  printf '%b' "$C_RESET" >&2
 }
 
 confirm() {
   local prompt="${1:-Nastaviti?}"
   local answer
-  printf '%b' "$C_CYAN"
+  printf '%b' "$C_CYAN" >&2
   read -r -p "$prompt [y/N]: " answer
-  printf '%b' "$C_RESET"
+  printf '%b' "$C_RESET" >&2
   case "${answer,,}" in
     y|yes|da|d) return 0 ;;
     *) return 1 ;;
@@ -97,9 +97,9 @@ confirm() {
 prompt_value() {
   local prompt="$1"
   local value
-  printf '%b' "$C_CYAN"
+  printf '%b' "$C_CYAN" >&2
   read -r -p "$prompt: " value
-  printf '%b' "$C_RESET"
+  printf '%b' "$C_RESET" >&2
   printf '%s\n' "$value"
 }
 
@@ -193,15 +193,15 @@ menu_select() {
   local key idx
 
   while true; do
-    ui_begin "$title"
+    ui_begin "$title" >&2
     for idx in "${!options[@]}"; do
       if [ "$idx" -eq "$selected" ]; then
-        printf '%b > %s%b\n' "$C_SELECT$C_WHITE" "${options[$idx]}" "$C_RESET"
+        printf '%b > %s%b\n' "$C_SELECT$C_WHITE" "${options[$idx]}" "$C_RESET" >&2
       else
-        printf '   %s\n' "${options[$idx]}"
+        printf '   %s\n' "${options[$idx]}" >&2
       fi
     done
-    printf '\n%bStrelice gore/dolje%b za odabir, %bEnter%b za potvrdu.\n' "$C_DIM" "$C_RESET" "$C_BOLD" "$C_RESET"
+    printf '\n%bStrelice gore/dolje%b za odabir, %bEnter%b za potvrdu.\n' "$C_DIM" "$C_RESET" "$C_BOLD" "$C_RESET" >&2
     IFS= read -rsn1 key
     case "$key" in
       "") printf '%s\n' "$selected"; return 0 ;;
