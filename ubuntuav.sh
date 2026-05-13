@@ -96,6 +96,19 @@ install_packages() {
   run_root apt-get install -y "${packages[@]}"
 }
 
+download_file() {
+  local url="$1"
+  local output="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -o "$output" "$url"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -O "$output" "$url"
+  else
+    err "Ni curl ni wget nisu dostupni za download."
+    return 1
+  fi
+}
+
 service_restart() {
   local svc="$1"
   confirm "Restartati servis $svc?" && run_root systemctl restart "$svc"
@@ -523,19 +536,18 @@ menu_webmin() {
   else
     warn "Webmin nije detektiran."
   fi
-  confirm "Instalirati Webmin repo i paket?" || { pause; return; }
-  install_packages curl gnupg ca-certificates
-  webmin_setup_repository
+  webmin_cleanup_repositories
+  confirm "Instalirati Webmin .deb paket bez Webmin APT repoa?" || { pause; return; }
+  install_packages ca-certificates
+  webmin_install_deb
   run_root apt-get update
-  run_root apt-get install -y --install-recommends webmin
   if command -v ufw >/dev/null 2>&1 && confirm "Otvoriti UFW port 10000/tcp za Webmin?" ; then
     run_root ufw allow 10000/tcp
   fi
   pause
 }
 
-webmin_setup_repository() {
-  local setup_script="/tmp/webmin-setup-repo.sh"
+webmin_cleanup_repositories() {
   local legacy_repo="/etc/apt/sources.list.d/webmin.list"
   local managed_repo="/etc/apt/sources.list.d/webmin-stable.list"
 
@@ -546,11 +558,15 @@ webmin_setup_repository() {
 
   if [ -f "$managed_repo" ]; then
     backup_file "$managed_repo"
+    run_root rm -f "$managed_repo"
   fi
+}
 
-  curl -fsSL -o "$setup_script" https://raw.githubusercontent.com/webmin/webmin/master/webmin-setup-repo.sh
-  run_root sh "$setup_script"
-  rm -f "$setup_script"
+webmin_install_deb() {
+  local package="/tmp/webmin-current.deb"
+  download_file "https://www.webmin.com/download/deb/webmin-current.deb" "$package"
+  run_root apt-get install -y --install-recommends "$package"
+  rm -f "$package"
 }
 
 menu_postgresql() {
