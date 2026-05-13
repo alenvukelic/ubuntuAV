@@ -1,0 +1,10 @@
+PRIVATE.md
+.env
+*.secret
+*.key
+*.pem
+*.crt
+*.csr
+*.log
+tmp/
+dist/
