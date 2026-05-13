@@ -2,15 +2,45 @@
 set -Eeuo pipefail
 
 APP_NAME="ubuntuAV"
-APP_VERSION="1.0.1"
+APP_VERSION="1.1.0"
 MANAGED_MARK="# ubuntuAV managed"
 EU_COUNTRIES="AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE"
 
-bold() { printf '\033[1m%s\033[0m\n' "$*"; }
-info() { printf '[INFO] %s\n' "$*"; }
-warn() { printf '[WARN] %s\n' "$*" >&2; }
-err() { printf '[ERR ] %s\n' "$*" >&2; }
-pause() { read -r -p "Enter za nastavak..." _; }
+C_RESET=$'\033[0m'
+C_BOLD=$'\033[1m'
+C_DIM=$'\033[2m'
+C_BLUE=$'\033[38;5;39m'
+C_CYAN=$'\033[38;5;45m'
+C_GREEN=$'\033[38;5;70m'
+C_YELLOW=$'\033[38;5;220m'
+C_RED=$'\033[38;5;203m'
+C_WHITE=$'\033[97m'
+C_SELECT=$'\033[48;5;25m'
+HEADER_LINES=6
+
+cecho() { printf '%b%s%b\n' "$1" "$2" "$C_RESET"; }
+bold() { cecho "$C_BOLD$C_WHITE" "$*"; }
+info() { printf '%b[INFO]%b %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+warn() { printf '%b[WARN]%b %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+err() { printf '%b[ERR ]%b %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
+
+term_cols() {
+  if command -v tput >/dev/null 2>&1; then
+    tput cols 2>/dev/null || printf '80\n'
+  else
+    printf '80\n'
+  fi
+}
+
+term_lines() {
+  if command -v tput >/dev/null 2>&1; then
+    tput lines 2>/dev/null || printf '24\n'
+  else
+    printf '24\n'
+  fi
+}
+
+timestamp() { date +%Y%m%d-%H%M%S; }
 
 is_root() { [ "${EUID:-$(id -u)}" -eq 0 ]; }
 
@@ -28,9 +58,7 @@ run_root() {
 run_user() {
   local user="$1"
   shift
-  if is_root; then
-    sudo -u "$user" "$@"
-  elif command -v sudo >/dev/null 2>&1; then
+  if command -v sudo >/dev/null 2>&1; then
     sudo -u "$user" "$@"
   else
     err "Ova akcija treba sudo za korisnika $user."
@@ -38,14 +66,156 @@ run_user() {
   fi
 }
 
+ui_cleanup() {
+  if command -v tput >/dev/null 2>&1; then
+    tput csr 0 "$(($(term_lines) - 1))" 2>/dev/null || true
+    tput sgr0 2>/dev/null || true
+    tput cnorm 2>/dev/null || true
+  fi
+}
+
+trap ui_cleanup EXIT
+
+pause() {
+  printf '\n%b' "$C_DIM"
+  read -r -p "Enter za nastavak..." _
+  printf '%b' "$C_RESET"
+}
+
 confirm() {
   local prompt="${1:-Nastaviti?}"
   local answer
+  printf '%b' "$C_CYAN"
   read -r -p "$prompt [y/N]: " answer
+  printf '%b' "$C_RESET"
   case "${answer,,}" in
     y|yes|da|d) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+prompt_value() {
+  local prompt="$1"
+  local value
+  printf '%b' "$C_CYAN"
+  read -r -p "$prompt: " value
+  printf '%b' "$C_RESET"
+  printf '%s\n' "$value"
+}
+
+repeat_char() {
+  local char="$1" count="$2"
+  printf '%*s' "$count" '' | tr ' ' "$char"
+}
+
+safe_head() { "$@" 2>/dev/null | head -n 1 || true; }
+
+package_version() {
+  local pkg="$1"
+  dpkg-query -W -f='${Version}' "$pkg" 2>/dev/null || printf -- '-'
+}
+
+command_version() {
+  local cmd="$1"
+  shift
+  if command -v "$cmd" >/dev/null 2>&1; then
+    "$cmd" "$@" 2>&1 | head -n 1
+  else
+    printf -- '-'
+  fi
+}
+
+python_version_label() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 --version 2>/dev/null | awk '{print $2}'
+  else
+    printf -- '-'
+  fi
+}
+
+primary_ip() {
+  ip -4 route get 1.1.1.1 2>/dev/null | awk '/src/ {for (i=1; i<=NF; i++) if ($i=="src") {print $(i+1); exit}}'
+}
+
+gateway_ip() {
+  ip route 2>/dev/null | awk '/default/ {print $3; exit}'
+}
+
+os_label() {
+  if [ -r /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    printf '%s\n' "${PRETTY_NAME:-${NAME:-Ubuntu}}"
+  else
+    printf 'Ubuntu/Debian\n'
+  fi
+}
+
+render_header() {
+  local cols line host ip_addr gate os_name ssh_v nginx_v pg_v py_v
+  cols="$(term_cols)"
+  line="$(repeat_char '=' "$cols")"
+  host="$(hostname 2>/dev/null || printf '-')"
+  ip_addr="$(primary_ip)"
+  gate="$(gateway_ip)"
+  os_name="$(os_label)"
+  ssh_v="$(package_version openssh-server)"
+  nginx_v="$(package_version nginx)"
+  pg_v="$(package_version postgresql)"
+  py_v="$(python_version_label)"
+
+  printf '%b%s%b\n' "$C_BLUE$C_BOLD" "$line" "$C_RESET"
+  printf '%b%s%b %bv%s%b   %bHost:%b %s   %bIP:%b %s\n' \
+    "$C_BLUE$C_BOLD" "$APP_NAME" "$C_RESET" "$C_DIM" "$APP_VERSION" "$C_RESET" \
+    "$C_CYAN" "$C_RESET" "$host" "$C_CYAN" "$C_RESET" "${ip_addr:-"-"}"
+  printf '%bOS:%b %s   %bGateway:%b %s\n' "$C_CYAN" "$C_RESET" "$os_name" "$C_CYAN" "$C_RESET" "${gate:-"-"}"
+  printf '%bPaketi:%b SSH %s | NGINX %s | PostgreSQL %s | Python %s\n' \
+    "$C_CYAN" "$C_RESET" "$ssh_v" "$nginx_v" "$pg_v" "$py_v"
+  printf '%b%s%b\n' "$C_BLUE$C_BOLD" "$line" "$C_RESET"
+}
+
+ui_begin() {
+  local title="$1"
+  clear || true
+  render_header
+  if command -v tput >/dev/null 2>&1; then
+    tput csr "$HEADER_LINES" "$(($(term_lines) - 1))" 2>/dev/null || true
+    tput cup "$HEADER_LINES" 0 2>/dev/null || true
+  fi
+  printf '%b%s%b\n\n' "$C_BOLD$C_WHITE" "$title" "$C_RESET"
+}
+
+menu_select() {
+  local title="$1"
+  shift
+  local options=("$@")
+  local selected=0
+  local key idx
+
+  while true; do
+    ui_begin "$title"
+    for idx in "${!options[@]}"; do
+      if [ "$idx" -eq "$selected" ]; then
+        printf '%b > %s%b\n' "$C_SELECT$C_WHITE" "${options[$idx]}" "$C_RESET"
+      else
+        printf '   %s\n' "${options[$idx]}"
+      fi
+    done
+    printf '\n%bStrelice gore/dolje%b za odabir, %bEnter%b za potvrdu.\n' "$C_DIM" "$C_RESET" "$C_BOLD" "$C_RESET"
+    IFS= read -rsn1 key
+    case "$key" in
+      "") printf '%s\n' "$selected"; return 0 ;;
+      $'\x1b')
+        IFS= read -rsn2 key || true
+        case "$key" in
+          "[A") [ "$selected" -gt 0 ] && selected=$((selected - 1)) ;;
+          "[B") [ "$selected" -lt $((${#options[@]} - 1)) ] && selected=$((selected + 1)) ;;
+        esac
+        ;;
+      k) [ "$selected" -gt 0 ] && selected=$((selected - 1)) ;;
+      j) [ "$selected" -lt $((${#options[@]} - 1)) ] && selected=$((selected + 1)) ;;
+    esac
+  done
 }
 
 require_ubuntu() {
@@ -59,12 +229,10 @@ require_ubuntu() {
   fi
 }
 
-timestamp() { date +%Y%m%d-%H%M%S; }
-
 backup_file() {
   local file="$1"
   if [ ! -e "$file" ]; then
-    warn "Datoteka ne postoji, backup preskočen: $file"
+    warn "Datoteka ne postoji, backup preskocen: $file"
     return 0
   fi
   local dir base dest
@@ -76,29 +244,17 @@ backup_file() {
 }
 
 safe_append_once() {
-  local file="$1"
-  local marker="$2"
-  local content="$3"
+  local file="$1" marker="$2" content="$3"
   if [ -f "$file" ] && grep -Fq "$marker" "$file"; then
-    info "Blok već postoji u $file"
+    info "Blok vec postoji u $file"
     return 0
   fi
   backup_file "$file"
   printf '%s\n' "$content" | run_root tee -a "$file" >/dev/null
 }
 
-install_packages() {
-  local packages=("$@")
-  if [ "${#packages[@]}" -eq 0 ]; then return 0; fi
-  info "Paketi za instalaciju: ${packages[*]}"
-  confirm "Instalirati apt pakete?" || return 0
-  run_root apt-get update
-  run_root apt-get install -y "${packages[@]}"
-}
-
 download_file() {
-  local url="$1"
-  local output="$2"
+  local url="$1" output="$2"
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL -o "$output" "$url"
   elif command -v wget >/dev/null 2>&1; then
@@ -109,6 +265,15 @@ download_file() {
   fi
 }
 
+install_packages() {
+  local packages=("$@")
+  [ "${#packages[@]}" -eq 0 ] && return 0
+  info "Paketi za instalaciju: ${packages[*]}"
+  confirm "Instalirati apt pakete?" || return 0
+  run_root apt-get update
+  run_root apt-get install -y "${packages[@]}"
+}
+
 service_restart() {
   local svc="$1"
   confirm "Restartati servis $svc?" && run_root systemctl restart "$svc"
@@ -117,61 +282,103 @@ service_restart() {
 print_cmd() {
   local title="$1"
   shift
-  bold "$title"
-  if "$@"; then true; else warn "Naredba nije uspjela: $*"; fi
+  printf '%b%s%b\n' "$C_BOLD$C_WHITE" "$title" "$C_RESET"
+  if "$@"; then :; else warn "Naredba nije uspjela: $*"; fi
   printf '\n'
 }
 
 main_menu() {
   while true; do
-    clear || true
-    bold "$APP_NAME $APP_VERSION"
-    cat <<'MENU'
-1. System overview
-2. ZeroTier
-3. NGINX
-4. NGINX GeoIP2
-5. NGINX rate limiting
-6. AppArmor
-7. SSL / OpenSSL / certbot
-8. SSH
-9. UFW firewall
-10. Webmin
-11. PostgreSQL
-12. Python
-13. Backup
-14. System tools / Telegram / Disk / SpeedTest
-15. GitHub deploy helper
-16. Backups list / restore
-0. Exit
-MENU
-    read -r -p "Odabir: " choice
+    local choice
+    choice="$(menu_select "Glavni izbornik" \
+      "Pregled i inventar" \
+      "Pristup i sigurnost" \
+      "Web stack" \
+      "Baze i runtime" \
+      "Operacije i backup" \
+      "GitHub deploy helper" \
+      "Backups list / restore" \
+      "Exit")"
     case "$choice" in
-      1) system_overview ;;
-      2) menu_zerotier ;;
-      3) menu_nginx ;;
-      4) menu_geoip2 ;;
-      5) menu_rate_limit ;;
-      6) menu_apparmor ;;
-      7) menu_ssl ;;
-      8) menu_ssh ;;
-      9) menu_ufw ;;
-      10) menu_webmin ;;
-      11) menu_postgresql ;;
-      12) menu_python ;;
-      13) menu_backup ;;
-      14) menu_system_tools ;;
-      15) menu_github_deploy ;;
-      16) menu_backups ;;
-      0) exit 0 ;;
-      *) warn "Nepoznat odabir." ; pause ;;
+      0) menu_overview ;;
+      1) menu_security ;;
+      2) menu_web_stack ;;
+      3) menu_data_runtime ;;
+      4) menu_operations ;;
+      5) menu_github_deploy ;;
+      6) menu_backups ;;
+      7) exit 0 ;;
+    esac
+  done
+}
+
+menu_overview() {
+  while true; do
+    local c
+    c="$(menu_select "Pregled i inventar" "System overview" "Backups list / restore" "Nazad")"
+    case "$c" in
+      0) system_overview ;;
+      1) menu_backups ;;
+      2) return ;;
+    esac
+  done
+}
+
+menu_security() {
+  while true; do
+    local c
+    c="$(menu_select "Pristup i sigurnost" "ZeroTier" "SSH" "UFW firewall" "AppArmor" "Nazad")"
+    case "$c" in
+      0) menu_zerotier ;;
+      1) menu_ssh ;;
+      2) menu_ufw ;;
+      3) menu_apparmor ;;
+      4) return ;;
+    esac
+  done
+}
+
+menu_web_stack() {
+  while true; do
+    local c
+    c="$(menu_select "Web stack" "NGINX" "NGINX GeoIP2" "NGINX rate limiting" "SSL / OpenSSL / certbot" "Webmin" "Nazad")"
+    case "$c" in
+      0) menu_nginx ;;
+      1) menu_geoip2 ;;
+      2) menu_rate_limit ;;
+      3) menu_ssl ;;
+      4) menu_webmin ;;
+      5) return ;;
+    esac
+  done
+}
+
+menu_data_runtime() {
+  while true; do
+    local c
+    c="$(menu_select "Baze i runtime" "PostgreSQL" "Python" "Nazad")"
+    case "$c" in
+      0) menu_postgresql ;;
+      1) menu_python ;;
+      2) return ;;
+    esac
+  done
+}
+
+menu_operations() {
+  while true; do
+    local c
+    c="$(menu_select "Operacije i backup" "Backup" "System tools / Telegram / Disk / SpeedTest" "Nazad")"
+    case "$c" in
+      0) menu_backup ;;
+      1) menu_system_tools ;;
+      2) return ;;
     esac
   done
 }
 
 system_overview() {
-  clear || true
-  bold "System overview"
+  ui_begin "System overview"
   print_cmd "Hostname" hostnamectl
   print_cmd "Uptime" uptime
   print_cmd "IP adrese" ip -br addr
@@ -185,83 +392,61 @@ system_overview() {
 
 menu_zerotier() {
   while true; do
-    clear || true
-    bold "ZeroTier"
-    command -v zerotier-cli >/dev/null 2>&1 && zerotier-cli status || warn "ZeroTier nije instaliran."
-    cat <<'MENU'
-1. Instaliraj ZeroTier
-2. Status / info
-3. Join network
-4. Leave network
-5. List networks
-6. List peers
-0. Nazad
-MENU
-    read -r -p "Odabir: " c
+    local c
+    c="$(menu_select "ZeroTier" "Instaliraj ZeroTier" "Status / info" "Join network" "Leave network" "List networks" "List peers" "Nazad")"
     case "$c" in
-      1) install_packages curl gnupg; curl -s https://install.zerotier.com | run_root bash ;;
-      2) run_root zerotier-cli info; pause ;;
-      3) read -r -p "ZeroTier network ID: " id; run_root zerotier-cli join "$id"; pause ;;
-      4) read -r -p "ZeroTier network ID: " id; run_root zerotier-cli leave "$id"; pause ;;
-      5) run_root zerotier-cli listnetworks; pause ;;
-      6) run_root zerotier-cli peers; pause ;;
-      0) return ;;
-      *) warn "Nepoznat odabir."; pause ;;
+      0) install_packages curl gnupg; curl -s https://install.zerotier.com | run_root bash ;;
+      1) ui_begin "ZeroTier status"; run_root zerotier-cli info; pause ;;
+      2) id="$(prompt_value "ZeroTier network ID")"; [ -n "$id" ] && run_root zerotier-cli join "$id"; pause ;;
+      3) id="$(prompt_value "ZeroTier network ID")"; [ -n "$id" ] && run_root zerotier-cli leave "$id"; pause ;;
+      4) ui_begin "ZeroTier networks"; run_root zerotier-cli listnetworks; pause ;;
+      5) ui_begin "ZeroTier peers"; run_root zerotier-cli peers; pause ;;
+      6) return ;;
     esac
   done
 }
 
 menu_nginx() {
   while true; do
-    clear || true
-    bold "NGINX"
-    detect_webservers
-    cat <<'MENU'
-1. Instaliraj NGINX
-2. Ispiši konfiguraciju i siteove
-3. Test konfiguracije
-4. Dodaj basic website
-5. Ukloni enabled website
-6. Restart / reload
-0. Nazad
-MENU
-    read -r -p "Odabir: " c
+    local c
+    c="$(menu_select "NGINX" "Instaliraj NGINX" "Ispisi konfiguraciju i siteove" "Test konfiguracije" "Dodaj basic website" "Ukloni enabled website" "Restart / reload" "Nazad")"
     case "$c" in
-      1) install_packages nginx ;;
-      2) nginx_show_config ;;
-      3) run_root nginx -t; pause ;;
-      4) nginx_add_site ;;
-      5) nginx_remove_site ;;
-      6) confirm "Reload NGINX?" && run_root systemctl reload nginx; pause ;;
-      0) return ;;
-      *) warn "Nepoznat odabir."; pause ;;
+      0) install_packages nginx ;;
+      1) nginx_show_config ;;
+      2) ui_begin "NGINX test"; run_root nginx -t; pause ;;
+      3) nginx_add_site ;;
+      4) nginx_remove_site ;;
+      5) confirm "Reload NGINX?" && run_root systemctl reload nginx; pause ;;
+      6) return ;;
     esac
   done
 }
 
 detect_webservers() {
-  bold "Webserver procesi/servisi"
-  for svc in nginx apache2 lighttpd caddy; do
-    if systemctl list-unit-files "$svc.service" >/dev/null 2>&1; then
-      systemctl is-active "$svc" >/dev/null 2>&1 && printf '%s: active\n' "$svc" || printf '%s: installed/inactive\n' "$svc"
-    fi
-  done
-  ss -tulpn 2>/dev/null | grep -E ':(80|443)\s' || true
-  printf '\n'
+  print_cmd "Webserver procesi/servisi" bash -lc '
+    for svc in nginx apache2 lighttpd caddy; do
+      if systemctl list-unit-files "$svc.service" >/dev/null 2>&1; then
+        systemctl is-active "$svc" >/dev/null 2>&1 && printf "%s: active\n" "$svc" || printf "%s: installed/inactive\n" "$svc"
+      fi
+    done
+    ss -tulpn 2>/dev/null | grep -E ":(80|443)\s" || true
+  '
 }
 
 nginx_show_config() {
+  ui_begin "NGINX konfiguracija"
+  detect_webservers
   run_root nginx -T 2>/tmp/ubuntuav-nginx.txt || true
   less /tmp/ubuntuav-nginx.txt || cat /tmp/ubuntuav-nginx.txt
   pause
 }
 
 nginx_add_site() {
-  read -r -p "Domena/site name: " domain
+  local domain root conf body
+  domain="$(prompt_value "Domena/site name")"
   [ -n "$domain" ] || return 0
-  local root="/var/www/$domain/public"
-  local conf="/etc/nginx/sites-available/$domain"
-  local body
+  root="/var/www/$domain/public"
+  conf="/etc/nginx/sites-available/$domain"
   body=$(cat <<EOF
 server {
     listen 80;
@@ -276,6 +461,7 @@ server {
 }
 EOF
 )
+  ui_begin "NGINX new site"
   info "Kreiram $root i $conf"
   confirm "Nastaviti?" || return 0
   run_root mkdir -p "$root"
@@ -288,10 +474,12 @@ EOF
 }
 
 nginx_remove_site() {
+  ui_begin "NGINX remove site"
   ls -1 /etc/nginx/sites-enabled 2>/dev/null || true
-  read -r -p "Enabled site za ukloniti: " site
+  local site target
+  site="$(prompt_value "Enabled site za ukloniti")"
   [ -n "$site" ] || return 0
-  local target="/etc/nginx/sites-enabled/$site"
+  target="/etc/nginx/sites-enabled/$site"
   if [ -e "$target" ] || [ -L "$target" ]; then
     confirm "Maknuti symlink $target?" && run_root rm "$target"
   fi
@@ -300,66 +488,51 @@ nginx_remove_site() {
 }
 
 menu_geoip2() {
-  clear || true
-  bold "NGINX GeoIP2"
-  cat <<'TEXT'
-GeoIP2 za NGINX traži modul ngx_http_geoip2_module i MaxMind bazu.
-Na Ubuntu paket obično postoji kao libnginx-mod-http-geoip2, a baze se mogu držati u /usr/share/GeoIP/.
-TEXT
-  cat <<'MENU'
-1. Instaliraj modul
-2. Dodaj globalni GeoIP2 EU map snippet
-3. Dodaj site allow/deny snippet primjer
-4. Test NGINX
-0. Nazad
-MENU
-  read -r -p "Odabir: " c
-  case "$c" in
-    1) install_packages libnginx-mod-http-geoip2 geoipupdate ;;
-    2) geoip2_global_snippet ;;
-    3) geoip2_site_snippet ;;
-    4) run_root nginx -t; pause ;;
-    0) return ;;
-  esac
+  while true; do
+    local c
+    c="$(menu_select "NGINX GeoIP2" "Instaliraj modul" "Dodaj globalni GeoIP2 EU map snippet" "Dodaj site allow/deny snippet primjer" "Test NGINX" "Nazad")"
+    case "$c" in
+      0) install_packages libnginx-mod-http-geoip2 geoipupdate ;;
+      1) geoip2_global_snippet ;;
+      2) geoip2_site_snippet ;;
+      3) ui_begin "NGINX GeoIP2 test"; run_root nginx -t; pause ;;
+      4) return ;;
+    esac
+  done
 }
 
 geoip2_global_snippet() {
-  local file="/etc/nginx/conf.d/ubuntuav-geoip2.conf"
-  local maps=""
-  for cc in $EU_COUNTRIES; do maps="$maps    $cc 1;\n"; done
-  local content
+  local file="/etc/nginx/conf.d/ubuntuav-geoip2.conf" maps="" cc content
+  for cc in $EU_COUNTRIES; do
+    maps="${maps}    ${cc} 1;\n"
+  done
   content=$(printf '%s\ngeoip2 /usr/share/GeoIP/GeoLite2-Country.mmdb {\n    $geoip2_data_country_code country iso_code;\n}\n\nmap $geoip2_data_country_code $is_eu {\n    default 0;\n%b}\n' "$MANAGED_MARK" "$maps")
   safe_append_once "$file" "$MANAGED_MARK" "$content"
+  ui_begin "NGINX GeoIP2"
   run_root nginx -t
   pause
 }
 
 geoip2_site_snippet() {
-  local file="/etc/nginx/snippets/ubuntuav-geoip2-site-policy.conf"
-  local content
+  local file="/etc/nginx/snippets/ubuntuav-geoip2-site-policy.conf" content
   content=$(cat <<'EOF'
 # ubuntuAV managed
 # Include inside server/location block, then customize as needed.
-# Block specific countries:
 # if ($geoip2_data_country_code ~ (CN|RU)) { return 403; }
-
-# Allow only Croatia:
 # if ($geoip2_data_country_code != "HR") { return 403; }
-
-# Allow only EU countries from global map:
 if ($is_eu = 0) {
     return 403;
 }
 EOF
 )
   safe_append_once "$file" "$MANAGED_MARK" "$content"
+  ui_begin "NGINX GeoIP2"
   info "U site dodaj: include snippets/ubuntuav-geoip2-site-policy.conf;"
   pause
 }
 
 menu_rate_limit() {
-  clear || true
-  bold "NGINX Rate Limiting"
+  ui_begin "NGINX rate limiting"
   local global="/etc/nginx/conf.d/ubuntuav-rate-limit.conf"
   local snippet="/etc/nginx/snippets/ubuntuav-rate-limit-location.conf"
   local gcontent="$MANAGED_MARK
@@ -369,83 +542,61 @@ limit_req zone=req_limit burst=10 nodelay;"
   confirm "Dodati globalni req_limit i location snippet?" || return 0
   safe_append_once "$global" "$MANAGED_MARK" "$gcontent"
   safe_append_once "$snippet" "$MANAGED_MARK" "$scontent"
-  info "U željeni location dodaj: include snippets/ubuntuav-rate-limit-location.conf;"
+  info "U zeljeni location dodaj: include snippets/ubuntuav-rate-limit-location.conf;"
   run_root nginx -t
   pause
 }
 
 menu_apparmor() {
-  clear || true
-  bold "AppArmor"
-  command -v aa-status >/dev/null 2>&1 || install_packages apparmor apparmor-utils
-  run_root aa-status || true
-  cat <<'MENU'
-1. Enforce profile
-2. Complain profile
-3. Reload AppArmor
-0. Nazad
-MENU
-  read -r -p "Odabir: " c
-  case "$c" in
-    1) read -r -p "Profile path/name: " p; run_root aa-enforce "$p"; pause ;;
-    2) read -r -p "Profile path/name: " p; run_root aa-complain "$p"; pause ;;
-    3) run_root systemctl reload apparmor; pause ;;
-    0) return ;;
-  esac
+  while true; do
+    local c p
+    c="$(menu_select "AppArmor" "Enforce profile" "Complain profile" "Reload AppArmor" "Nazad")"
+    case "$c" in
+      0) p="$(prompt_value "Profile path/name")"; [ -n "$p" ] && run_root aa-enforce "$p"; pause ;;
+      1) p="$(prompt_value "Profile path/name")"; [ -n "$p" ] && run_root aa-complain "$p"; pause ;;
+      2) run_root systemctl reload apparmor; pause ;;
+      3) return ;;
+    esac
+  done
 }
 
 menu_ssl() {
-  clear || true
-  bold "SSL / certbot"
-  cat <<'MENU'
-1. OpenSSL self-signed cert
-2. Instaliraj certbot NGINX plugin
-3. Izradi/obnovi Let's Encrypt cert za domenu
-4. Test renewal
-0. Nazad
-MENU
-  read -r -p "Odabir: " c
-  case "$c" in
-    1) ssl_self_signed ;;
-    2) install_packages certbot python3-certbot-nginx ;;
-    3) read -r -p "Domena: " d; run_root certbot --nginx -d "$d"; pause ;;
-    4) run_root certbot renew --dry-run; pause ;;
-    0) return ;;
-  esac
+  while true; do
+    local c d
+    c="$(menu_select "SSL / certbot" "OpenSSL self-signed cert" "Instaliraj certbot NGINX plugin" "Izradi/obnovi Let's Encrypt cert za domenu" "Test renewal" "Nazad")"
+    case "$c" in
+      0) ssl_self_signed ;;
+      1) install_packages certbot python3-certbot-nginx ;;
+      2) d="$(prompt_value "Domena")"; [ -n "$d" ] && run_root certbot --nginx -d "$d"; pause ;;
+      3) ui_begin "certbot renew"; run_root certbot renew --dry-run; pause ;;
+      4) return ;;
+    esac
+  done
 }
 
 ssl_self_signed() {
-  read -r -p "Domena/CN: " domain
+  local domain dir
+  domain="$(prompt_value "Domena/CN")"
   [ -n "$domain" ] || return 0
-  local dir="/etc/ssl/ubuntuav/$domain"
+  dir="/etc/ssl/ubuntuav/$domain"
   run_root mkdir -p "$dir"
-  run_root openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-    -keyout "$dir/privkey.pem" -out "$dir/fullchain.pem" -subj "/CN=$domain"
+  run_root openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout "$dir/privkey.pem" -out "$dir/fullchain.pem" -subj "/CN=$domain"
+  ui_begin "SSL"
   info "Cert: $dir/fullchain.pem"
   pause
 }
 
 menu_ssh() {
   while true; do
-    clear || true
-    bold "SSH"
-    ssh_audit
-    cat <<'MENU'
-1. Disable root login
-2. Disable global password authentication
-3. Dodaj ZeroTier subnet Match rule za password auth
-4. Test sshd config
-5. Restart SSH
-0. Nazad
-MENU
-    read -r -p "Odabir: " c
+    local c
+    c="$(menu_select "SSH" "Disable root login" "Disable global password authentication" "Dodaj ZeroTier subnet Match rule za password auth" "Test sshd config" "Restart SSH" "Nazad")"
     case "$c" in
-      1) ssh_set_option PermitRootLogin no ;;
-      2) ssh_set_option PasswordAuthentication no ;;
-      3) ssh_zt_password_rule ;;
-      4) run_root sshd -t; pause ;;
-      5) service_restart ssh; pause ;;
-      0) return ;;
+      0) ssh_set_option PermitRootLogin no ;;
+      1) ssh_set_option PasswordAuthentication no ;;
+      2) ssh_zt_password_rule ;;
+      3) ui_begin "sshd test"; run_root sshd -t; pause ;;
+      4) service_restart ssh; pause ;;
+      5) return ;;
     esac
   done
 }
@@ -468,6 +619,8 @@ ssh_audit() {
 ssh_set_option() {
   local key="$1" val="$2" cfg
   cfg="$(ssh_config_file)"
+  ui_begin "SSH konfiguracija"
+  ssh_audit
   confirm "Postaviti $key $val u $cfg?" || return 0
   backup_file "$cfg"
   if grep -Eq "^[#[:space:]]*$key[[:space:]]+" "$cfg"; then
@@ -480,44 +633,36 @@ ssh_set_option() {
 }
 
 ssh_zt_password_rule() {
-  local cfg subnet
+  local cfg subnet block
   cfg="$(ssh_config_file)"
-  read -r -p "ZeroTier subnet/CIDR koji smije password auth (npr 10.147.0.0/16): " subnet
+  subnet="$(prompt_value "ZeroTier subnet/CIDR koji smije password auth (npr 10.147.0.0/16)")"
   [ -n "$subnet" ] || return 0
-  local block
   block="$MANAGED_MARK
 Match Address $subnet
     PasswordAuthentication yes"
   safe_append_once "$cfg" "$MANAGED_MARK" "$block"
+  ui_begin "SSH konfiguracija"
   run_root sshd -t
   pause
 }
 
 menu_ufw() {
-  clear || true
-  bold "UFW firewall"
-  command -v ufw >/dev/null 2>&1 || install_packages ufw
-  run_root ufw status verbose || true
-  cat <<'MENU'
-1. Primijeni baseline: deny incoming, allow outgoing, allow 22/80/443
-2. Allow port
-3. Deny port
-4. Enable UFW
-5. Disable UFW
-0. Nazad
-MENU
-  read -r -p "Odabir: " c
-  case "$c" in
-    1) ufw_baseline ;;
-    2) read -r -p "Port/protocol (npr 5432/tcp): " p; run_root ufw allow "$p"; pause ;;
-    3) read -r -p "Port/protocol: " p; run_root ufw deny "$p"; pause ;;
-    4) run_root ufw enable; pause ;;
-    5) run_root ufw disable; pause ;;
-    0) return ;;
-  esac
+  while true; do
+    local c p
+    c="$(menu_select "UFW firewall" "Primijeni baseline: deny incoming, allow outgoing, allow 22/80/443" "Allow port" "Deny port" "Enable UFW" "Disable UFW" "Nazad")"
+    case "$c" in
+      0) ufw_baseline ;;
+      1) p="$(prompt_value "Port/protocol (npr 5432/tcp)")"; [ -n "$p" ] && run_root ufw allow "$p"; pause ;;
+      2) p="$(prompt_value "Port/protocol")"; [ -n "$p" ] && run_root ufw deny "$p"; pause ;;
+      3) run_root ufw enable; pause ;;
+      4) run_root ufw disable; pause ;;
+      5) return ;;
+    esac
+  done
 }
 
 ufw_baseline() {
+  ui_begin "UFW baseline"
   confirm "Primijeniti UFW baseline pravila?" || return 0
   run_root ufw default deny incoming
   run_root ufw default allow outgoing
@@ -529,8 +674,7 @@ ufw_baseline() {
 }
 
 menu_webmin() {
-  clear || true
-  bold "Webmin"
+  ui_begin "Webmin"
   if command -v webmin >/dev/null 2>&1 || systemctl list-unit-files webmin.service >/dev/null 2>&1; then
     run_root systemctl status webmin --no-pager || true
   else
@@ -541,7 +685,7 @@ menu_webmin() {
   install_packages ca-certificates
   webmin_install_deb
   run_root apt-get update
-  if command -v ufw >/dev/null 2>&1 && confirm "Otvoriti UFW port 10000/tcp za Webmin?" ; then
+  if command -v ufw >/dev/null 2>&1 && confirm "Otvoriti UFW port 10000/tcp za Webmin?"; then
     run_root ufw allow 10000/tcp
   fi
   pause
@@ -550,12 +694,10 @@ menu_webmin() {
 webmin_cleanup_repositories() {
   local legacy_repo="/etc/apt/sources.list.d/webmin.list"
   local managed_repo="/etc/apt/sources.list.d/webmin-stable.list"
-
   if [ -f "$legacy_repo" ]; then
     backup_file "$legacy_repo"
     run_root rm -f "$legacy_repo"
   fi
-
   if [ -f "$managed_repo" ]; then
     backup_file "$managed_repo"
     run_root rm -f "$managed_repo"
@@ -571,25 +713,15 @@ webmin_install_deb() {
 
 menu_postgresql() {
   while true; do
-    clear || true
-    bold "PostgreSQL"
-    pg_audit
-    cat <<'MENU'
-1. Instaliraj PostgreSQL
-2. List users/databases
-3. Show memory settings
-4. Create dump task primjer
-5. Replication setup checklist
-0. Nazad
-MENU
-    read -r -p "Odabir: " c
+    local c
+    c="$(menu_select "PostgreSQL" "Instaliraj PostgreSQL" "List users/databases" "Show memory settings" "Create dump task primjer" "Replication setup checklist" "Nazad")"
     case "$c" in
-      1) install_packages postgresql postgresql-contrib ;;
-      2) run_user postgres psql -c '\du'; run_user postgres psql -c '\l'; pause ;;
-      3) run_user postgres psql -c "show shared_buffers; show effective_cache_size; show work_mem; show maintenance_work_mem;"; pause ;;
-      4) pg_dump_task ;;
-      5) pg_replication_checklist ;;
-      0) return ;;
+      0) install_packages postgresql postgresql-contrib ;;
+      1) ui_begin "PostgreSQL users/databases"; run_user postgres psql -c '\du'; run_user postgres psql -c '\l'; pause ;;
+      2) ui_begin "PostgreSQL memory"; run_user postgres psql -c "show shared_buffers; show effective_cache_size; show work_mem; show maintenance_work_mem;"; pause ;;
+      3) pg_dump_task ;;
+      4) pg_replication_checklist ;;
+      5) return ;;
     esac
   done
 }
@@ -600,11 +732,12 @@ pg_audit() {
 }
 
 pg_dump_task() {
-  read -r -p "Database name: " db
-  read -r -p "Backup dir [/var/backups/postgresql]: " dir
+  local db dir script content
+  db="$(prompt_value "Database name")"
+  [ -n "$db" ] || return 0
+  dir="$(prompt_value "Backup dir [/var/backups/postgresql]")"
   dir="${dir:-/var/backups/postgresql}"
-  local script="/usr/local/sbin/ubuntuav-pg-dump-$db.sh"
-  local content
+  script="/usr/local/sbin/ubuntuav-pg-dump-$db.sh"
   content="#!/usr/bin/env bash
 set -Eeuo pipefail
 mkdir -p '$dir'
@@ -617,68 +750,53 @@ pg_dump -Fc '$db' > '$dir/$db-\$(date +%Y%m%d-%H%M%S).dump'"
 }
 
 pg_replication_checklist() {
+  ui_begin "PostgreSQL replication checklist"
   cat <<'TEXT'
-Replication checklist:
-1. Primary: set wal_level=replica, max_wal_senders, hot_standby=on.
-2. Primary: create replication user with strong password.
-3. Primary: add standby IP to pg_hba.conf with replication permission.
-4. Standby: run pg_basebackup from primary.
-5. Standby: create standby.signal and primary_conninfo.
-6. Test failover plan before relying on it.
+1. Primary: postavi wal_level=replica, max_wal_senders i hot_standby=on.
+2. Primary: kreiraj replication user sa jakom lozinkom.
+3. Primary: dodaj standby IP u pg_hba.conf za replication.
+4. Standby: pokreni pg_basebackup sa primary hosta.
+5. Standby: kreiraj standby.signal i primary_conninfo.
+6. Testiraj failover prije produkcije.
 TEXT
   pause
 }
 
 menu_python() {
-  clear || true
-  bold "Python"
-  ls -1 /usr/bin/python* 2>/dev/null | sort || true
-  python3 --version 2>/dev/null || true
-  cat <<'MENU'
-1. Instaliraj python3/pip/venv
-2. Instaliraj specifični apt paket (npr python3.12)
-3. Ukloni apt python paket
-0. Nazad
-MENU
-  read -r -p "Odabir: " c
-  case "$c" in
-    1) install_packages python3 python3-pip python3-venv ;;
-    2) read -r -p "Package: " p; install_packages "$p" ;;
-    3) read -r -p "Package za remove: " p; confirm "Ukloniti $p?" && run_root apt-get remove -y "$p"; pause ;;
-    0) return ;;
-  esac
+  while true; do
+    local c p
+    c="$(menu_select "Python" "Instaliraj python3/pip/venv" "Instaliraj specificni apt paket" "Ukloni apt python paket" "Nazad")"
+    case "$c" in
+      0) install_packages python3 python3-pip python3-venv ;;
+      1) p="$(prompt_value "Package")"; [ -n "$p" ] && install_packages "$p" ;;
+      2) p="$(prompt_value "Package za remove")"; [ -n "$p" ] && confirm "Ukloniti $p?" && run_root apt-get remove -y "$p"; pause ;;
+      3) return ;;
+    esac
+  done
 }
 
 menu_backup() {
   while true; do
-    clear || true
-    bold "Backup"
-    cat <<'MENU'
-1. Filesystem tar.gz backup task
-2. FTP upload task primjer
-3. PostgreSQL dump task
-4. List cron ubuntuAV tasks
-0. Nazad
-MENU
-    read -r -p "Odabir: " c
+    local c
+    c="$(menu_select "Backup" "Filesystem tar.gz backup task" "FTP upload task primjer" "PostgreSQL dump task" "List cron ubuntuAV tasks" "Nazad")"
     case "$c" in
-      1) fs_backup_task ;;
-      2) ftp_backup_task ;;
-      3) pg_dump_task ;;
-      4) ls -l /etc/cron.d/ubuntuav-* 2>/dev/null || true; pause ;;
-      0) return ;;
+      0) fs_backup_task ;;
+      1) ftp_backup_task ;;
+      2) pg_dump_task ;;
+      3) ui_begin "ubuntuAV cron tasks"; ls -l /etc/cron.d/ubuntuav-* 2>/dev/null || true; pause ;;
+      4) return ;;
     esac
   done
 }
 
 fs_backup_task() {
-  read -r -p "Path za backup: " src
-  read -r -p "Backup dir [/var/backups/ubuntuav]: " dir
+  local src dir name script content
+  src="$(prompt_value "Path za backup")"
+  [ -n "$src" ] || return 0
+  dir="$(prompt_value "Backup dir [/var/backups/ubuntuav]")"
   dir="${dir:-/var/backups/ubuntuav}"
-  local name
   name="$(basename "$src" | tr -c 'A-Za-z0-9_.-' '_')"
-  local script="/usr/local/sbin/ubuntuav-fs-backup-$name.sh"
-  local content
+  script="/usr/local/sbin/ubuntuav-fs-backup-$name.sh"
   content="#!/usr/bin/env bash
 set -Eeuo pipefail
 mkdir -p '$dir'
@@ -691,11 +809,12 @@ tar -czf '$dir/$name-\$(date +%Y%m%d-%H%M%S).tar.gz' '$src'"
 }
 
 ftp_backup_task() {
+  ui_begin "FTP backup"
   cat <<'TEXT'
 FTP preporuka:
 - Nemoj spremati FTP lozinku u repo.
-- Na serveru koristi /root/.netrc s chmod 600 ili SFTP/SSH key gdje je moguće.
-- Script može uploadati postojeći backup direktorij pomoću lftp mirror -R.
+- Na serveru koristi /root/.netrc s chmod 600 ili SFTP/SSH key gdje je moguce.
+- Script moze uploadati postojeci backup direktorij pomocu lftp mirror -R.
 TEXT
   install_packages lftp
   pause
@@ -703,33 +822,23 @@ TEXT
 
 menu_system_tools() {
   while true; do
-    clear || true
-    bold "System tools"
-    cat <<'MENU'
-1. Check updates
-2. Basic info
-3. Telegram test/send setup
-4. Disk/partitions
-5. Mount network disk guidance
-6. SpeedTest / fio
-0. Nazad
-MENU
-    read -r -p "Odabir: " c
+    local c
+    c="$(menu_select "System tools" "Check updates" "Basic info" "Telegram test/send setup" "Disk/partitions" "Mount network disk guidance" "SpeedTest / fio" "Nazad")"
     case "$c" in
-      1) run_root apt-get update; apt list --upgradable; pause ;;
-      2) system_overview ;;
-      3) telegram_setup ;;
-      4) lsblk -f; df -hT; pause ;;
-      5) network_disk_guidance ;;
-      6) speedtest_fio ;;
-      0) return ;;
+      0) ui_begin "APT updates"; run_root apt-get update; apt list --upgradable; pause ;;
+      1) system_overview ;;
+      2) telegram_setup ;;
+      3) ui_begin "Disk/partitions"; lsblk -f; df -hT; pause ;;
+      4) network_disk_guidance ;;
+      5) speedtest_fio ;;
+      6) return ;;
     esac
   done
 }
 
 telegram_setup() {
+  ui_begin "Telegram"
   cat <<'TEXT'
-Telegram:
 1. Kod BotFather kreiraj bot i token spremi lokalno, ne u repo.
 2. Dohvati chat_id slanjem poruke botu pa otvori getUpdates.
 3. Preporuka: spremi /etc/ubuntuav/telegram.env s chmod 600:
@@ -739,8 +848,7 @@ TEXT
   confirm "Kreirati helper /usr/local/bin/ubuntuav-telegram-send?" || return 0
   run_root mkdir -p /etc/ubuntuav
   local helper="/usr/local/bin/ubuntuav-telegram-send"
-  local content
-  content='#!/usr/bin/env bash
+  local content='#!/usr/bin/env bash
 set -Eeuo pipefail
 . /etc/ubuntuav/telegram.env
 msg="${1:-ubuntuAV test}"
@@ -753,65 +861,52 @@ curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage
 }
 
 network_disk_guidance() {
+  ui_begin "Network disk guidance"
   cat <<'TEXT'
 Network disk mapping:
 - SMB/CIFS: apt install cifs-utils, credentials in /root/.smbcredentials chmod 600.
 - NFS: apt install nfs-common, mount server:/export /mnt/name.
-- Always test manually before adding /etc/fstab.
+- Uvijek testiraj manualno prije dodavanja u /etc/fstab.
 TEXT
   pause
 }
 
 speedtest_fio() {
-  cat <<'MENU'
-1. Instaliraj fio i speedtest-cli
-2. Run fio quick disk test
-3. Run network speedtest
-0. Nazad
-MENU
-  read -r -p "Odabir: " c
-  case "$c" in
-    1) install_packages fio speedtest-cli ;;
-    2) fio --name=ubuntuav --filename=/tmp/ubuntuav-fio-test --size=256M --rw=readwrite --bs=4k --iodepth=16 --runtime=30 --time_based --group_reporting; rm -f /tmp/ubuntuav-fio-test; pause ;;
-    3) speedtest-cli; pause ;;
-    0) return ;;
-  esac
+  while true; do
+    local c
+    c="$(menu_select "SpeedTest / fio" "Instaliraj fio i speedtest-cli" "Run fio quick disk test" "Run network speedtest" "Nazad")"
+    case "$c" in
+      0) install_packages fio speedtest-cli ;;
+      1) ui_begin "fio"; fio --name=ubuntuav --filename=/tmp/ubuntuav-fio-test --size=256M --rw=readwrite --bs=4k --iodepth=16 --runtime=30 --time_based --group_reporting; rm -f /tmp/ubuntuav-fio-test; pause ;;
+      2) ui_begin "speedtest"; speedtest-cli; pause ;;
+      3) return ;;
+    esac
+  done
 }
 
 menu_github_deploy() {
-  clear || true
-  bold "GitHub deploy helper"
-  cat <<'TEXT'
-Ovaj helper generira SSH deploy key na serveru i ispisuje public key.
-Public key dodaj u GitHub repo kao Deploy key ili u Actions secret, ovisno o deployment flowu.
-Private key ostaje na serveru i ne smije ići u repo.
-TEXT
-  cat <<'MENU'
-1. Generiraj deploy SSH key
-2. Ispiši public key
-3. Test git SSH prema GitHubu
-0. Nazad
-MENU
-  read -r -p "Odabir: " c
-  local key="$HOME/.ssh/ubuntuav_github_deploy"
-  case "$c" in
-    1) mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"; ssh-keygen -t ed25519 -C "ubuntuav-deploy-$(hostname)" -f "$key"; pause ;;
-    2) cat "$key.pub"; pause ;;
-    3) ssh -T git@github.com || true; pause ;;
-    0) return ;;
-  esac
+  while true; do
+    local c key
+    c="$(menu_select "GitHub deploy helper" "Generiraj deploy SSH key" "Ispisi public key" "Test git SSH prema GitHubu" "Nazad")"
+    key="$HOME/.ssh/ubuntuav_github_deploy"
+    case "$c" in
+      0) mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"; ssh-keygen -t ed25519 -C "ubuntuav-deploy-$(hostname)" -f "$key"; pause ;;
+      1) ui_begin "GitHub deploy public key"; cat "$key.pub"; pause ;;
+      2) ui_begin "GitHub SSH test"; ssh -T git@github.com || true; pause ;;
+      3) return ;;
+    esac
+  done
 }
 
 menu_backups() {
-  clear || true
-  bold "Backups list / restore"
-  read -r -p "Original file path za pretragu backupova: " file
+  ui_begin "Backups list / restore"
+  local file dir base backup
+  file="$(prompt_value "Original file path za pretragu backupova")"
   [ -n "$file" ] || return 0
-  local dir base
   dir="$(dirname "$file")"
   base="$(basename "$file")"
   ls -1 "$dir"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]."$base" 2>/dev/null || true
-  read -r -p "Backup file za restore (prazno za nazad): " backup
+  backup="$(prompt_value "Backup file za restore (prazno za nazad)")"
   [ -n "$backup" ] || return 0
   [ -f "$backup" ] || { warn "Ne postoji: $backup"; pause; return 1; }
   confirm "Restore $backup -> $file?" || return 0
