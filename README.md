@@ -4,7 +4,7 @@ Interactive Ubuntu server bootstrap, audit, hardening, and maintenance helper fo
 
 The tool is a plain Bash text application. It uses numbered menus, Yes/No confirmations, and standard Ubuntu commands so it can run over SSH without a desktop, browser, Python app server, or Node runtime.
 
-Version `1.2.0` adds a more application-like TUI with a persistent header, best-practice recommendation counters, richer status views, and a local replay script for performed actions.
+Version `1.2.1` adds a more application-like TUI with a persistent header, best-practice recommendation counters, richer status views, and a local replay script for performed actions.
 
 ## Quick Run From Ubuntu
 
@@ -34,6 +34,7 @@ chmod +x ubuntuav.sh
 - Shows server identity and network state: hostname, OS, uptime, IPs, gateway, DNS, routes, and network adapters.
 - Keeps a persistent header visible with app version, host, IP, gateway, and key package versions.
 - Highlights best-practice recommendations in menus, for example risky SSH or firewall defaults that should be reviewed.
+- Shows current UFW install/status/default policy/rules before firewall actions, with unsafe items highlighted and suggested fixes shown inline.
 - Manages safety backups for edited system files and can list or restore backups by timestamp.
 - Guides ZeroTier install/status/join/leave flows and displays visible peers where available.
 - Audits and configures NGINX sites, GeoIP2 snippets, rate limiting snippets, AppArmor status, and SSL/certbot flows.

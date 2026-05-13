@@ -18,6 +18,7 @@
 - Keep menus number-based and readable over plain SSH.
 - Favor practical diagnostics over hidden automation. Show current state before proposing changes.
 - Treat the app as a guided tool for novice operators: explain current state, show best-practice recommendations, and block risky hardening steps when prerequisites are missing.
+- Menus that contain risky or recommended actions must first show the current service state, installed/enabled status, relevant rules/settings, red-highlighted problems, and concrete fix suggestions.
 - Every mutating action should be mirrored into a local replay script/log so the operator can review what happened and reuse it on another fresh server.
 
 ## Code Style

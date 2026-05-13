@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_NAME="ubuntuAV"
-APP_VERSION="1.2.0"
+APP_VERSION="1.2.1"
 MANAGED_MARK="# ubuntuAV managed"
 EU_COUNTRIES="AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE"
 ACTION_LOG_DIR="${PWD}/ubuntuav-logs"
@@ -272,6 +272,42 @@ menu_select() {
   done
 }
 
+menu_select_with_context() {
+  local title="$1"
+  local context_fn="$2"
+  shift 2
+  local options=("$@")
+  local selected=0
+  local key idx
+
+  while true; do
+    ui_begin "$title" >&2
+    "$context_fn" >&2 || true
+    printf '\n' >&2
+    for idx in "${!options[@]}"; do
+      if [ "$idx" -eq "$selected" ]; then
+        printf '%b > %s%b\n' "$C_SELECT$C_WHITE" "${options[$idx]}" "$C_RESET" >&2
+      else
+        printf '   %s\n' "${options[$idx]}" >&2
+      fi
+    done
+    printf '\n%bStrelice gore/dolje%b za odabir, %bEnter%b za potvrdu.\n' "$C_DIM" "$C_RESET" "$C_BOLD" "$C_RESET" >&2
+    IFS= read -rsn1 key
+    case "$key" in
+      "") printf '%s\n' "$selected"; return 0 ;;
+      $'\x1b')
+        IFS= read -rsn2 key || true
+        case "$key" in
+          "[A") [ "$selected" -gt 0 ] && selected=$((selected - 1)) ;;
+          "[B") [ "$selected" -lt $((${#options[@]} - 1)) ] && selected=$((selected + 1)) ;;
+        esac
+        ;;
+      k) [ "$selected" -gt 0 ] && selected=$((selected - 1)) ;;
+      j) [ "$selected" -lt $((${#options[@]} - 1)) ] && selected=$((selected + 1)) ;;
+    esac
+  done
+}
+
 require_ubuntu() {
   if [ -r /etc/os-release ]; then
     # shellcheck disable=SC1091
@@ -318,6 +354,83 @@ has_sudo_user() {
 
 ufw_is_active() {
   command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | head -n 1 | grep -qi 'Status: active'
+}
+
+ufw_status_output() {
+  command -v ufw >/dev/null 2>&1 || return 1
+  ufw status verbose 2>/dev/null || true
+}
+
+ufw_default_is_good() {
+  local direction="$1" expected="$2" line
+  line="$(ufw_status_output | grep -i '^Default:' || true)"
+  printf '%s\n' "$line" | grep -Eiq "${expected}[[:space:]]+\(${direction}\)"
+}
+
+ufw_rule_allows() {
+  local port="$1"
+  command -v ufw >/dev/null 2>&1 || return 1
+  ufw status 2>/dev/null | grep -Eiq "^${port}(/tcp)?[[:space:]]+ALLOW"
+}
+
+ufw_status_panel() {
+  local status default_line rules
+  if ! command -v ufw >/dev/null 2>&1; then
+    printf '%bInstalled:%b no\n' "$C_RED$C_BOLD" "$C_RESET"
+    printf '%bProblem:%b UFW nije instaliran. Firewall baseline se ne moze primijeniti.\n' "$C_RED" "$C_RESET"
+    printf '%bPrijedlog:%b instaliraj UFW i primijeni baseline prije izlaganja servisa javnom internetu.\n' "$C_YELLOW" "$C_RESET"
+    return 0
+  fi
+
+  status="$(ufw status 2>/dev/null | head -n 1 || true)"
+  default_line="$(ufw_status_output | grep -i '^Default:' || true)"
+  rules="$(ufw status 2>/dev/null | sed '1,4d' || true)"
+
+  printf '%bInstalled:%b yes (%s)\n' "$C_GREEN" "$C_RESET" "$(package_version ufw)"
+  if printf '%s\n' "$status" | grep -qi 'active'; then
+    printf '%bStatus:%b active\n' "$C_GREEN" "$C_RESET"
+  else
+    printf '%bStatus:%b inactive\n' "$C_RED$C_BOLD" "$C_RESET"
+  fi
+
+  if [ -n "$default_line" ]; then
+    if ufw_default_is_good "incoming" "deny"; then
+      printf '%bDefault incoming:%b deny\n' "$C_GREEN" "$C_RESET"
+    else
+      printf '%bDefault incoming:%b %s\n' "$C_RED$C_BOLD" "$C_RESET" "$default_line"
+    fi
+    if ufw_default_is_good "outgoing" "allow"; then
+      printf '%bDefault outgoing:%b allow\n' "$C_GREEN" "$C_RESET"
+    else
+      printf '%bDefault outgoing:%b %s\n' "$C_RED$C_BOLD" "$C_RESET" "$default_line"
+    fi
+  else
+    printf '%bDefault policies:%b nije moguce procitati bez dodatnih prava ili UFW nije inicijaliziran.\n' "$C_YELLOW" "$C_RESET"
+  fi
+
+  printf '\n%bOsnovna pravila:%b\n' "$C_CYAN" "$C_RESET"
+  for port in 22 80 443; do
+    if ufw_rule_allows "$port"; then
+      printf '  %bALLOW %s/tcp%b\n' "$C_GREEN" "$port" "$C_RESET"
+    else
+      printf '  %bMISSING allow %s/tcp%b\n' "$C_RED$C_BOLD" "$port" "$C_RESET"
+    fi
+  done
+
+  printf '\n%bPostojeca UFW pravila:%b\n' "$C_CYAN" "$C_RESET"
+  if [ -n "$rules" ]; then
+    printf '%s\n' "$rules" | sed '/^[[:space:]]*$/d' | head -n 12
+  else
+    printf '  - nema pravila ili ih nije moguce procitati\n'
+  fi
+
+  printf '\n%bPrijedlozi:%b\n' "$C_YELLOW" "$C_RESET"
+  printf '%s\n' "$status" | grep -qi 'active' || printf '  - Enable UFW nakon sto je SSH port dozvoljen, inace mozes izgubiti pristup.\n'
+  ufw_default_is_good "incoming" "deny" || printf '  - Postavi default deny incoming.\n'
+  ufw_default_is_good "outgoing" "allow" || printf '  - Postavi default allow outgoing.\n'
+  ufw_rule_allows 22 || printf '  - Dozvoli 22/tcp prije enable koraka ako SSH koristis za pristup serveru.\n'
+  ufw_rule_allows 80 || printf '  - Dozvoli 80/tcp ako server treba HTTP.\n'
+  ufw_rule_allows 443 || printf '  - Dozvoli 443/tcp ako server treba HTTPS.\n'
 }
 
 nginx_is_installed() {
@@ -850,16 +963,48 @@ Match Address $subnet
 menu_ufw() {
   while true; do
     local c p
-    c="$(menu_select "UFW firewall" "Primijeni baseline: deny incoming, allow outgoing, allow 22/80/443" "Allow port" "Deny port" "Enable UFW" "Disable UFW" "Nazad")"
+    c="$(menu_select_with_context "UFW firewall" ufw_status_panel "Primijeni baseline: deny incoming, allow outgoing, allow 22/80/443" "Allow port" "Deny port" "Enable UFW" "Disable UFW" "Nazad")"
     case "$c" in
       0) ufw_baseline ;;
-      1) p="$(prompt_value "Port/protocol (npr 5432/tcp)")"; [ -n "$p" ] && run_root ufw allow "$p"; pause ;;
-      2) p="$(prompt_value "Port/protocol")"; [ -n "$p" ] && run_root ufw deny "$p"; pause ;;
-      3) run_root ufw enable; pause ;;
-      4) run_root ufw disable; pause ;;
+      1) p="$(prompt_value "Port/protocol (npr 5432/tcp)")"; ufw_allow_port "$p" ;;
+      2) p="$(prompt_value "Port/protocol")"; ufw_deny_port "$p" ;;
+      3) ufw_enable ;;
+      4) ufw_disable ;;
       5) return ;;
     esac
   done
+}
+
+ufw_allow_port() {
+  local port="$1"
+  [ -n "$port" ] || return 0
+  log_comment "UFW allow $port"
+  log_action "sudo ufw allow $port"
+  run_root ufw allow "$port"
+  pause
+}
+
+ufw_deny_port() {
+  local port="$1"
+  [ -n "$port" ] || return 0
+  log_comment "UFW deny $port"
+  log_action "sudo ufw deny $port"
+  run_root ufw deny "$port"
+  pause
+}
+
+ufw_enable() {
+  log_comment "Enable UFW"
+  log_action "sudo ufw enable"
+  run_root ufw enable
+  pause
+}
+
+ufw_disable() {
+  log_comment "Disable UFW"
+  log_action "sudo ufw disable"
+  run_root ufw disable
+  pause
 }
 
 ufw_baseline() {
