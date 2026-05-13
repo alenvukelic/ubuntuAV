@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_NAME="ubuntuAV"
-APP_VERSION="0.1.0"
+APP_VERSION="1.0.1"
 MANAGED_MARK="# ubuntuAV managed"
 EU_COUNTRIES="AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE"
 
@@ -525,10 +525,32 @@ menu_webmin() {
   fi
   confirm "Instalirati Webmin repo i paket?" || { pause; return; }
   install_packages curl gnupg ca-certificates
-  curl -fsSL https://download.webmin.com/jcameron-key.asc | run_root gpg --dearmor -o /usr/share/keyrings/webmin.gpg
-  echo "deb [signed-by=/usr/share/keyrings/webmin.gpg] https://download.webmin.com/download/repository sarge contrib" | run_root tee /etc/apt/sources.list.d/webmin.list >/dev/null
-  install_packages webmin
+  webmin_setup_repository
+  run_root apt-get update
+  run_root apt-get install -y --install-recommends webmin
+  if command -v ufw >/dev/null 2>&1 && confirm "Otvoriti UFW port 10000/tcp za Webmin?" ; then
+    run_root ufw allow 10000/tcp
+  fi
   pause
+}
+
+webmin_setup_repository() {
+  local setup_script="/tmp/webmin-setup-repo.sh"
+  local legacy_repo="/etc/apt/sources.list.d/webmin.list"
+  local managed_repo="/etc/apt/sources.list.d/webmin-stable.list"
+
+  if [ -f "$legacy_repo" ]; then
+    backup_file "$legacy_repo"
+    run_root rm -f "$legacy_repo"
+  fi
+
+  if [ -f "$managed_repo" ]; then
+    backup_file "$managed_repo"
+  fi
+
+  curl -fsSL -o "$setup_script" https://raw.githubusercontent.com/webmin/webmin/master/webmin-setup-repo.sh
+  run_root sh "$setup_script"
+  rm -f "$setup_script"
 }
 
 menu_postgresql() {

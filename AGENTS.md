@@ -8,6 +8,10 @@
 
 - Never commit secrets, tokens, private keys, host credentials, Telegram bot tokens, database passwords, or private server addresses.
 - Keep local/private operator notes in `PRIVATE.md`; this file is intentionally ignored by git.
+- Save work locally whenever needed, including local git commits when they help preserve progress.
+- Do not run `git push` automatically. Push to GitHub only after the user explicitly asks to make a commit in the GitHub/publication sense.
+- Use three-level semantic versioning in all projects: `major.minor.patch`.
+- Keep commits and releases aligned with that model, and update the project version when changes warrant it.
 - Before changing any existing system file, use the project backup helper. Backups must be stored next to the original file and named with `YYYYMMDD-HHMMSS.original-name`.
 - Prefer dry-run style previews and explicit Yes/No confirmation before package installs, service restarts, firewall changes, SSH hardening, database changes, or destructive cleanup.
 - Commands that require root should be routed through `run_root` or clearly check for privileges.
